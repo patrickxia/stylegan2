@@ -51,6 +51,9 @@ class Projector:
         if self.verbose:
             print('Projector:', *args)
 
+    def set_iters(self, iters):
+        self.num_steps = iters
+
     def set_network(self, Gs, minibatch_size=1):
         assert minibatch_size == 1
         self._Gs = Gs
