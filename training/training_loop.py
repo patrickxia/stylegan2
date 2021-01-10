@@ -18,7 +18,7 @@ import dnnlib
 import dnnlib.tflib as tflib
 from dnnlib.tflib.autosummary import autosummary
 
-from training import dataset
+from training import dataset, misc
 
 #----------------------------------------------------------------------------
 # Select size and contents of the image snapshot grids that are exported
@@ -117,11 +117,14 @@ def training_loop(
     print()
 
     print('Constructing networks...')
+    resume_kimg = 0
     with tf.device('/gpu:0'):
         G = tflib.Network('G', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **G_args)
         D = tflib.Network('D', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **D_args)
         Gs = G.clone('Gs')
         if resume_pkl is not None:
+            if resume_pkl == 'latest':
+                resume_pkl, resume_kimg = misc.locate_latest_pkl(f'{run_dir}/..')
             print(f'Resuming from "{resume_pkl}"')
             with dnnlib.util.open_url(resume_pkl) as f:
                 rG, rD, rGs = pickle.load(f)
@@ -222,8 +225,8 @@ def training_loop(
         progress_fn(0, total_kimg)
     tick_start_time = time.time()
     maintenance_time = tick_start_time - start_time
-    cur_nimg = 0
     cur_tick = -1
+    cur_nimg = int(resume_kimg * 1000)
     tick_start_nimg = cur_nimg
     running_mb_counter = 0
 

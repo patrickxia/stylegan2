@@ -439,7 +439,7 @@ def setup_training_options(
         desc += '-resumecustom'
         args.resume_pkl = resume # custom path or url
 
-    if resume != 'noresume':
+    if resume != 'noresume' and resume != 'latest':
         args.augment_args.tune_kimg = 100 # make ADA react faster at the beginning
         args.G_smoothing_rampup = None # disable EMA rampup
 
