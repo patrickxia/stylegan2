@@ -368,12 +368,14 @@ def G_synthesis(
 
     **_kwargs,                          # Ignore unrecognized keyword args.
 ):
-    resolution_log2 = int(np.log2(resolution))
-    assert resolution == 2**resolution_log2 and resolution >= 4
+    # XXX: hardcoded everything
+    min_h = 5
+    min_w = 3
+    resolution_log2 = 6
     def nf(stage): return np.clip(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_min, fmap_max)
     assert architecture in ['orig', 'skip', 'resnet']
     act = nonlinearity
-    num_layers = resolution_log2 * 2 - 2
+    num_layers = resolution_log2 * 2 + 2
 
     # Disentangled latent (W).
     dlatents_in.set_shape([None, num_layers, dlatent_size])
@@ -383,8 +385,8 @@ def G_synthesis(
     noise_inputs = []
     if use_noise:
         for layer_idx in range(num_layers - 1):
-            res = (layer_idx + 5) // 2
-            shape = [1, 1, 2**res, 2**res]
+            res = (layer_idx + 5) // 2 - 2
+            shape = [1, 1, min_h*2**res, min_w*2**res]
             noise_inputs.append(tf.get_variable(f'noise{layer_idx}', shape=shape, initializer=tf.initializers.random_normal(), trainable=False))
 
     # Single convolution layer with all the bells and whistles.
@@ -400,16 +402,16 @@ def G_synthesis(
         return apply_bias_act(x, act=act, clamp=conv_clamp)
 
     # Main block for one resolution.
-    def block(x, res): # res = 3..resolution_log2
+    def block(x, res): # res = 1..resolution_log2 + 1
         x = tf.cast(x, 'float16' if res > resolution_log2 - num_fp16_res else dtype)
         t = x
         with tf.variable_scope('Conv0_up'):
-            x = layer(x, layer_idx=res*2-5, fmaps=nf(res-1), kernel=3, up=True)
+            x = layer(x, layer_idx=res*2-1, fmaps=nf(res+1), kernel=3, up=True)
         with tf.variable_scope('Conv1'):
-            x = layer(x, layer_idx=res*2-4, fmaps=nf(res-1), kernel=3)
+            x = layer(x, layer_idx=res*2, fmaps=nf(res+1), kernel=3)
         if architecture == 'resnet':
             with tf.variable_scope('Skip'):
-                t = conv2d_layer(t, fmaps=nf(res-1), kernel=1, up=True, resample_kernel=resample_kernel)
+                t = conv2d_layer(t, fmaps=nf(res+1), kernel=1, up=True, resample_kernel=resample_kernel)
                 x = (x + t) * (1 / np.sqrt(2))
         return x
 
@@ -419,9 +421,9 @@ def G_synthesis(
             return upsample_2d(y, k=resample_kernel)
 
     # ToRGB block.
-    def torgb(x, y, res): # res = 2..resolution_log2
+    def torgb(x, y, res): # res = 0..resolution_log2
         with tf.variable_scope('ToRGB'):
-            t = modulated_conv2d_layer(x, dlatents_in[:, res*2-3], fmaps=num_channels, kernel=1, demodulate=False, fused_modconv=fused_modconv)
+            t = modulated_conv2d_layer(x, dlatents_in[:, res*2+1], fmaps=num_channels, kernel=1, demodulate=False, fused_modconv=fused_modconv)
             t = apply_bias_act(t, clamp=conv_clamp)
             t = tf.cast(t, dtype)
             if y is not None:
@@ -430,19 +432,19 @@ def G_synthesis(
 
     # Layers for 4x4 resolution.
     y = None
-    with tf.variable_scope('4x4'):
+    with tf.variable_scope(f'{min_h}x{min_w}'):
         with tf.variable_scope('Const'):
             fmaps = fmap_const if fmap_const is not None else nf(1)
-            x = tf.get_variable('const', shape=[1, fmaps, 4, 4], initializer=tf.initializers.random_normal())
+            x = tf.get_variable('const', shape=[1, nf(1), min_h, min_w], initializer=tf.initializers.random_normal())
             x = tf.tile(tf.cast(x, dtype), [tf.shape(dlatents_in)[0], 1, 1, 1])
         with tf.variable_scope('Conv'):
             x = layer(x, layer_idx=0, fmaps=nf(1), kernel=3)
         if architecture == 'skip':
-            y = torgb(x, y, 2)
+            y = torgb(x, y, 0)
 
     # Layers for >=8x8 resolutions.
-    for res in range(3, resolution_log2 + 1):
-        with tf.variable_scope(f'{2**res}x{2**res}'):
+    for res in range(1, resolution_log2 + 1):
+        with tf.variable_scope(f'{min_h*2**res}x{min_w*2**res}'):
             x = block(x, res)
             if architecture == 'skip':
                 y = upsample(y)
@@ -497,8 +499,10 @@ def D_main(
 
     **_kwargs,                          # Ignore unrecognized keyword args.
 ):
-    resolution_log2 = int(np.log2(resolution))
-    assert resolution == 2**resolution_log2 and resolution >= 4
+    # XXX: hardcoded
+    min_h = 5
+    min_w = 3
+    resolution_log2 = 6
     def nf(stage): return np.clip(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_min, fmap_max)
     assert architecture in ['orig', 'skip', 'resnet']
     if mapping_fmaps is None:
@@ -506,7 +510,7 @@ def D_main(
     act = nonlinearity
 
     # Inputs.
-    images_in.set_shape([None, num_channels, resolution, resolution])
+    images_in.set_shape([None, num_channels, min_h*2**resolution_log2, min_w*2**resolution_log2])
     labels_in.set_shape([None, label_size])
     images_in = tf.cast(images_in, dtype)
     labels_in = tf.cast(labels_in, dtype)
@@ -550,12 +554,14 @@ def D_main(
             pagan_signs = tf.reduce_prod(1 - pagan_bits * 2, axis=1, keepdims=True)
 
     # FromRGB block.
-    def fromrgb(x, y, res): # res = 2..resolution_log2
+    def fromrgb(x, y, res): # res = 0..resolution_log2
         with tf.variable_scope('FromRGB'):
             trainable = is_next_layer_trainable()
-            t = tf.cast(y, 'float16' if res > resolution_log2 - num_fp16_res else dtype)
-            t = adrop(conv2d_layer(t, fmaps=nf(res-1), kernel=1, trainable=trainable))
+            # HACK: got rid of some fp16_res nonsense
+            t = y #tf.cast(y, 'float16' if res > resolution_log2 - num_fp16_res else dtype)
+            t = adrop(conv2d_layer(t, fmaps=nf(res+1), kernel=1, trainable=trainable))
             if pagan_bits is not None:
+                assert False, "idk what to do here"
                 with tf.variable_scope('PAGAN'):
                     t += dense_layer(tf.cast(pagan_bits, t.dtype), fmaps=nf(res-1), trainable=trainable)[:, :, np.newaxis, np.newaxis]
             t = apply_bias_act(t, act=act, clamp=conv_clamp, trainable=trainable)
@@ -565,18 +571,19 @@ def D_main(
 
     # Main block for one resolution.
     def block(x, res): # res = 2..resolution_log2
-        x = tf.cast(x, 'float16' if res > resolution_log2 - num_fp16_res else dtype)
+        # HACK: get rid of some fp16_res nonsense
+        # x = tf.cast(x, 'float16' if res > resolution_log2 - num_fp16_res else dtype)
         t = x
         with tf.variable_scope('Conv0'):
             trainable = is_next_layer_trainable()
-            x = apply_bias_act(adrop(conv2d_layer(x, fmaps=nf(res-1), kernel=3, trainable=trainable, use_spectral_norm=use_spectral_norm)), act=act, clamp=conv_clamp, trainable=trainable)
+            x = apply_bias_act(adrop(conv2d_layer(x, fmaps=nf(res+1), kernel=3, trainable=trainable, use_spectral_norm=use_spectral_norm)), act=act, clamp=conv_clamp, trainable=trainable)
         with tf.variable_scope('Conv1_down'):
             trainable = is_next_layer_trainable()
-            x = apply_bias_act(adrop(conv2d_layer(x, fmaps=nf(res-2), kernel=3, down=True, resample_kernel=resample_kernel, trainable=trainable, use_spectral_norm=use_spectral_norm)), act=act, clamp=conv_clamp, trainable=trainable)
+            x = apply_bias_act(adrop(conv2d_layer(x, fmaps=nf(res), kernel=3, down=True, resample_kernel=resample_kernel, trainable=trainable, use_spectral_norm=use_spectral_norm)), act=act, clamp=conv_clamp, trainable=trainable)
         if architecture == 'resnet':
             with tf.variable_scope('Skip'):
                 trainable = is_next_layer_trainable()
-                t = adrop(conv2d_layer(t, fmaps=nf(res-2), kernel=1, down=True, resample_kernel=resample_kernel, trainable=trainable))
+                t = adrop(conv2d_layer(t, fmaps=nf(res), kernel=1, down=True, resample_kernel=resample_kernel, trainable=trainable))
                 x = (x + t) * (1 / np.sqrt(2))
         return x
 
@@ -588,8 +595,8 @@ def D_main(
     # Layers for >=8x8 resolutions.
     x = None
     y = images_in
-    for res in range(resolution_log2, 2, -1):
-        with tf.variable_scope(f'{2**res}x{2**res}'):
+    for res in range(resolution_log2, 0, -1):
+        with tf.variable_scope(f'{min_h*2**res}x{min_w*2**res}'):
             if architecture == 'skip' or res == resolution_log2:
                 x = fromrgb(x, y, res)
             x = block(x, res)
@@ -597,9 +604,9 @@ def D_main(
                 y = downsample(y)
 
     # Layers for 4x4 resolution.
-    with tf.variable_scope('4x4'):
+    with tf.variable_scope(f'{min_h}x{min_w}'):
         if architecture == 'skip':
-            x = fromrgb(x, y, 2)
+            x = fromrgb(x, y, 0)
         x = tf.cast(x, dtype)
         if mbstd_num_features > 0:
             with tf.variable_scope('MinibatchStddev'):

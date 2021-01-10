@@ -537,6 +537,8 @@ def G_synthesis_stylegan2(
     fused_modconv       = True,         # Implement modulated_conv2d_layer() as a single fused op?
     **_kwargs):                         # Ignore unrecognized keyword args.
 
+    print("XXX: ", min_h)
+    assert False, "Dying"
     #resolution_log2 = int(np.log2(resolution))
     #assert resolution == 2**resolution_log2 and resolution >= 4
     assert min_h > 2 and min_w >2 and res_log2>=1

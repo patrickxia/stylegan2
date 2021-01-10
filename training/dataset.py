@@ -54,9 +54,9 @@ class TFRecordDataset:
         self._tf_minibatch_in   = None
         self._tf_labels_var     = None
         self._tf_labels_dataset = None
-        self._tf_datasets       = dict()
+        self._tf_dataset        = None
         self._tf_iterator       = None
-        self._tf_init_ops       = dict()
+        self._tf_init_op        = None
         self._tf_minibatch_np   = None
         self._cur_minibatch     = -1
         self._cur_lod           = -1
@@ -92,18 +92,19 @@ class TFRecordDataset:
 
         # Determine shape and resolution.
         max_shape = max(tfr_shapes, key=np.prod)
-        self.resolution = resolution if resolution is not None else max_shape[1]
-        self.resolution_log2 = int(np.log2(self.resolution))
-        self.shape = [max_shape[0], self.resolution, self.resolution]
-        tfr_lods = [self.resolution_log2 - int(np.log2(shape[1])) for shape in tfr_shapes]
+        print(max_shape)
+        # self.resolution = resolution if resolution is not None else max_shape[1]
+        # self.resolution_log2 = int(np.log2(self.resolution))
+        print("overriding resolution_log2")
+        self.resolution_log2 = 6
+        # max_shape is a proto, convert to a list ... by hardcoding it
+        self.shape = [max_shape[0], max_shape[1], max_shape[2]]
         assert all(shape[0] == max_shape[0] for shape in tfr_shapes)
-        assert all(shape[1] == shape[2] for shape in tfr_shapes)
-        assert all(shape[1] == self.resolution // (2**lod) for shape, lod in zip(tfr_shapes, tfr_lods))
-        #assert all(lod in tfr_lods for lod in range(self.resolution_log2 - 1))
 
         # Load labels.
         assert max_label_size == 'full' or max_label_size >= 0
-        self._np_labels = np.zeros([1<<30, 0], dtype=np.float32)
+        # Faster load (originally 2^30)
+        self._np_labels = np.zeros([1<<20, 0], dtype=np.float32)
         if self.label_file is not None and max_label_size != 0:
             self._np_labels = np.load(self.label_file)
             assert self._np_labels.ndim == 2
@@ -119,41 +120,41 @@ class TFRecordDataset:
             self._tf_minibatch_in = tf.placeholder(tf.int64, name='minibatch_in', shape=[])
             self._tf_labels_var = tflib.create_var_with_large_initial_value(self._np_labels, name='labels_var')
             self._tf_labels_dataset = tf.data.Dataset.from_tensor_slices(self._tf_labels_var)
-            for tfr_file, tfr_shape, tfr_lod in zip(tfr_files, tfr_shapes, tfr_lods):
-                if tfr_lod < 0:
-                    continue
-                dset = tf.data.TFRecordDataset(tfr_file, compression_type='', buffer_size=buffer_mb<<20)
-                if max_images is not None:
-                    dset = dset.take(max_images)
-                if use_raw:
-                    dset = dset.map(self.parse_tfrecord_tf_raw, num_parallel_calls=num_threads)
-                else:
-                    dset = dset.map(self.parse_tfrecord_tf, num_parallel_calls=num_threads)
-                dset = tf.data.Dataset.zip((dset, self._tf_labels_dataset))
+            # Only use the last record found in the tfr file. Assert if this doesn't work.
+            tfr_file = tfr_files[-1]
+            tfr_shape = tfr_shapes[-1]
+            assert self.shape == tfr_shape, "Largest shape in tfr {} doesn't match {}".format(tfr_shape, self.shape)
+            dset = tf.data.TFRecordDataset(tfr_file, compression_type='', buffer_size=buffer_mb<<20)
+            if max_images is not None:
+                dset = dset.take(max_images)
+            if use_raw:
+                dset = dset.map(self.parse_tfrecord_tf_raw, num_parallel_calls=num_threads)
+            else:
+                dset = dset.map(self.parse_tfrecord_tf, num_parallel_calls=num_threads)
+            dset = tf.data.Dataset.zip((dset, self._tf_labels_dataset))
 
-                bytes_per_item = np.prod(tfr_shape) * np.dtype(self.dtype).itemsize
-                if self.shuffle and shuffle_mb > 0:
-                    dset = dset.shuffle(((shuffle_mb << 20) - 1) // bytes_per_item + 1)
-                if self.repeat:
-                    dset = dset.repeat()
-                if prefetch_mb > 0:
-                    dset = dset.prefetch(((prefetch_mb << 20) - 1) // bytes_per_item + 1)
-                dset = dset.batch(self._tf_minibatch_in)
-                self._tf_datasets[tfr_lod] = dset
-            self._tf_iterator = tf.data.Iterator.from_structure(self._tf_datasets[0].output_types, self._tf_datasets[0].output_shapes)
-            self._tf_init_ops = {lod: self._tf_iterator.make_initializer(dset) for lod, dset in self._tf_datasets.items()}
+            bytes_per_item = np.prod(tfr_shape) * np.dtype(self.dtype).itemsize
+            if self.shuffle and shuffle_mb > 0:
+                dset = dset.shuffle(((shuffle_mb << 20) - 1) // bytes_per_item + 1)
+            if self.repeat:
+                dset = dset.repeat()
+            if prefetch_mb > 0:
+                dset = dset.prefetch(((prefetch_mb << 20) - 1) // bytes_per_item + 1)
+            dset = dset.batch(self._tf_minibatch_in)
+            self._tf_dataset = dset
+            self._tf_iterator = tf.data.Iterator.from_structure(self._tf_dataset.output_types, self._tf_dataset.output_shapes)
+            self._tf_init_op = self._tf_iterator.make_initializer(self._tf_dataset)
 
     def close(self):
         pass
 
     # Use the given minibatch size and level-of-detail for the data returned by get_minibatch_tf().
-    def configure(self, minibatch_size, lod=0):
-        lod = int(np.floor(lod))
-        assert minibatch_size >= 1 and lod in self._tf_datasets
-        if self._cur_minibatch != minibatch_size or self._cur_lod != lod:
-            self._tf_init_ops[lod].run({self._tf_minibatch_in: minibatch_size})
+    def configure(self, minibatch_size, lod_in=0):
+        # HACK: lod is completely ignored
+        assert minibatch_size >= 1
+        if self._cur_minibatch != minibatch_size:
+            self._tf_init_op.run({self._tf_minibatch_in: minibatch_size})
             self._cur_minibatch = minibatch_size
-            self._cur_lod = lod
 
     # Get next minibatch as TensorFlow expressions.
     def get_minibatch_tf(self):
