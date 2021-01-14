@@ -371,7 +371,7 @@ def G_synthesis(
     # XXX: hardcoded everything
     min_h = 5
     min_w = 3
-    resolution_log2 = 6
+    resolution_log2 = 8
     def nf(stage): return np.clip(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_min, fmap_max)
     assert architecture in ['orig', 'skip', 'resnet']
     act = nonlinearity
@@ -502,7 +502,7 @@ def D_main(
     # XXX: hardcoded
     min_h = 5
     min_w = 3
-    resolution_log2 = 6
+    resolution_log2 = 8
     def nf(stage): return np.clip(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_min, fmap_max)
     assert architecture in ['orig', 'skip', 'resnet']
     if mapping_fmaps is None:
