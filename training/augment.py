@@ -280,8 +280,8 @@ def augment_pipeline(
     aniso            = 0,           # Probability multiplier for anisotropic scaling.
     xfrac            = 0,           # Probability multiplier for fractional translation.
     scale_std        = 0.2,         # Log2 standard deviation of isotropic scaling.
-    rotate_max       = 1,           # Range of arbitrary rotation, 1 = full circle.
-    aniso_std        = 0.2,         # Log2 standard deviation of anisotropic scaling.
+    rotate_max       = 0.125,       # Range of arbitrary rotation, 1 = full circle.
+    aniso_std        = 0.1,         # Log2 standard deviation of anisotropic scaling.
     xfrac_std        = 0.125,       # Standard deviation of frational translation, relative to image dimensions.
 
     # Color transformations.
@@ -308,6 +308,7 @@ def augment_pipeline(
 ):
     # Determine input shape.
     batch, channels, height, width = images.shape.as_list()
+    square = (height == width)
     if batch is None:
         batch = tf.shape(images)[0]
 
@@ -328,7 +329,7 @@ def augment_pipeline(
         G_inv @= scale_2d_inv(1 - 2 * i, 1)
 
     # Apply 90 degree rotations with probability (rotate90 * strength).
-    if rotate90 > 0:
+    if rotate90 > 0 and square:
         i = tf.floor(tf.random_uniform([batch], 0, 4))
         i = gate_augment_params(rotate90 * strength, i, 0)
         if debug_percentile is not None:
