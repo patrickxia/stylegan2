@@ -776,7 +776,7 @@ def create_from_image_folders(tfrecord_dir, image_dir, shuffle, ignore_labels):
     
     label_count = 0
     for root, subdirs, files in os.walk(image_dir):
-        for subdir in subdirs:
+        for subdir in sorted(subdirs):
             folder_path = os.path.join(root, subdir)
             print('\t Loading images from "%s" as label %d' % (folder_path, label_count))
             # print('\t contains %d files' % len(os.listdir(folder_path)))
@@ -828,7 +828,7 @@ def create_from_image_folders_raw(tfrecord_dir, image_dir, shuffle, ignore_label
     
     label_count = 0
     for root, subdirs, files in os.walk(image_dir):
-        for subdir in subdirs:
+        for subdir in sorted(subdirs):
             folder_path = os.path.join(root, subdir)
             print('\t Loading images from "%s" as label %d' % (folder_path, label_count))
             # print('\t contains %d files' % len(os.listdir(folder_path)))
@@ -850,10 +850,11 @@ def create_from_image_folders_raw(tfrecord_dir, image_dir, shuffle, ignore_label
     img = np.asarray(PIL.Image.open(images[0]))
     resolution = img.shape[0]
     channels = img.shape[2] if img.ndim == 3 else 1
-    if img.shape[1] != resolution:
-        error('Input images must have the same width and height')
-    if resolution != 2 ** int(np.floor(np.log2(resolution))):
-        error('Input image resolution must be a power-of-two')
+    # Just ignore these checks
+    #if img.shape[1] != resolution:
+    #    error('Input images must have the same width and height')
+    #if resolution != 2 ** int(np.floor(np.log2(resolution))):
+    #    error('Input image resolution must be a power-of-two')
     if channels not in [1, 3]:
         error('Input images must be stored as RGB or grayscale')
 
